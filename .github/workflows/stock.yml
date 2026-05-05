@@ -3,7 +3,7 @@ name: A股智能选股（技术指标+豆包+微信推送）
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 1 * * * *"
+    - cron: "0 1 * * *"  # 每日北京时间 9:00
 
 jobs:
   stock-select:
