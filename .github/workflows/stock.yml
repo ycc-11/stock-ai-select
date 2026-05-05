@@ -25,7 +25,8 @@ jobs:
       - name: Run stock select
         env:
           DOUBAO_API_KEY: ${{ secrets.DOUBAO_API_KEY }}
-          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
+          WECOM_BOT_ID: ${{ secrets.WECOM_BOT_ID }}
+          WECOM_BOT_SECRET: ${{ secrets.WECOM_BOT_SECRET }}
         run: python main.py
 
       - name: Commit report
