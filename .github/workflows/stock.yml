@@ -29,11 +29,11 @@ jobs:
           WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
         run: python main.py
 
-      - name: Commit report
+      - name: Force add ignored files
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add report/*.md
+          git add -f report/*.md
           git commit -m "自动保存选股报告 $(date +'%Y-%m-%d %H:%M')"
           git push
         env:
