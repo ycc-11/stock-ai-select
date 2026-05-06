@@ -1,8 +1,9 @@
 import os
 import json
 import requests
-import re
 import time
+import pandas as pd
+import akshare as ak
 from datetime import datetime
 
 # ========== 1. 配置中心 ==========
@@ -11,163 +12,120 @@ WECOM_WEBHOOK = os.getenv("WECOM_WEBHOOK")
 ARK_API_URL = "https://ark.cn-beijing.volces.com/api/v3/responses"
 ENDPOINT_ID = "ep-20260506125835-cc6j5"
 
-HEADERS = {
-    "Referer": "https://finance.sina.com.cn/",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
+# ========== 2. 行情数据接口 (基于AkShare) ==========
 
-# ========== 2. 核心清洗函数 (新增) ==========
-
-def extract_codes(text):
-    """
-    从任何文本中提取 A 股代码。
-    支持格式：sh600000, 000001.sz, 600519 (带前缀或纯数字)
-    """
-    found = []
-    seen = set()
-    
-    # 1. 匹配带前缀的格式 (sh600000, sz000001)
-    prefix_matches = re.findall(r'(sh|sz)(\d{6})', text.lower())
-    for m, c in prefix_matches:
-        if c not in seen:
-            found.append((m, c))
-            seen.add(c)
-            
-    # 2. 匹配纯 6 位数字 (兜底：如果 AI 没给前缀)
-    # 排除掉已经是 sh/sz 匹配过的数字
-    digit_matches = re.findall(r'\b(\d{6})\b', text)
-    for c in digit_matches:
-        if c not in seen:
-            # A股规律：60/68开头是沪市，00/30开头是深市
-            if c.startswith(('60', '68', '90')):
-                m = "sh"
-            else:
-                m = "sz"
-            found.append((m, c))
-            seen.add(c)
-            
-    return found
+def get_today_zt_pool():
+    """获取今日涨停板数据池"""
+    print("\n>>> 正在从数据接口获取最新交易日涨停榜...")
+    try:
+        # 获取涨停池数据 (东财接口)
+        df = ak.stock_zt_pool_em()
+        if df.empty:
+            print("   [!] 未获取到涨停数据（可能是非交易时段）")
+            return []
+        
+        # 筛选核心字段：代码, 名称, 最新价, 涨幅, 成交额, 换手率, 连板数, 所属行业
+        # 字段名转换（AkShare版本不同字段名可能微调）
+        df = df[['代码', '名称', '最后封板时间', '换手率', '连板数', '所属行业']]
+        
+        # 排序：优先按连板数降序
+        df = df.sort_values(by='连板数', ascending=False)
+        
+        print(f"   [成功] 获取到 {len(df)} 只涨停个股，正在提取强势标的...")
+        return df.head(20).to_dict(orient='records')
+    except Exception as e:
+        print(f"   [错误] 获取行情失败: {e}")
+        return []
 
 # ========== 3. AI 调用模块 ==========
 
-def ask_doubao(prompt, log_title="AI调用"):
-    if not DOUBAO_API_KEY:
-        print("   [!] 错误: 未配置 API KEY")
-        return ""
+def ask_doubao_analyst(stock_data):
+    """将数据发送给豆包进行量化分析"""
+    print("\n>>> 正在将实时榜单发送至 AI 进行策略分析...")
+    
+    # 构建结构化的分析上下文
+    context = ""
+    for s in stock_data:
+        context += (f"股票: {s['名称']}({s['代码']}) | 连板数: {s['连板数']} | "
+                    f"换手率: {s['换手率']}% | 所属行业: {s['所属行业']} | 封板时间: {s['最后封板时间']}\n")
+
+    prompt = f"""
+    你是一名顶级A股短线游资操盘手。以下是今日市场表现最强劲的连板股票数据：
+    {context}
+
+    请执行以下任务：
+    1. 归纳当前市场最热门的【核心主线板块】。
+    2. 对每只股票进行打分（1-10分，10分为极度推荐）。
+    3. 给出【买入/观望/卖出】的具体操作建议。
+    4. 识别哪些股票存在“龙回头”机会或“接力”风险。
+
+    要求：排版清晰，专业且毒辣，不讲废话。
+    """
 
     headers = {
         "Authorization": f"Bearer {DOUBAO_API_KEY}",
         "Content-Type": "application/json"
     }
-    
     payload = {
         "model": ENDPOINT_ID,
         "messages": [
-            {"role": "system", "content": "你是一个金融数据接口。请严格执行指令，直接输出数据，不要输出任何开场白或解释。"},
+            {"role": "system", "content": "你是一个只看数据和逻辑的短线交易专家。"},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.2 # 极低随机性，防止 AI 话多
+        "temperature": 0.4
     }
 
     try:
         resp = requests.post(ARK_API_URL, headers=headers, json=payload, timeout=60)
         res = resp.json()
-        
-        # 兼容不同版本的返回结构
-        if "choices" in res:
-            return res["choices"][0]["message"]["content"].strip()
-        elif "output" in res:
-            return res["output"][0]["content"][0].get("text", "").strip()
-        return ""
+        return res["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        print(f"   [!] {log_title} 异常: {e}")
-        return ""
+        return f"AI 分析失败: {e}"
 
-def get_hot_stock_pool():
-    """改进版：分层 Prompt 确保代码产出"""
-    print("\n>>> 正在抓取今日 A 股热点标的...")
-    
-    # 极其直白的指令，防止 AI 产生安全顾虑而拒绝回答
-    prompt = """
-    当前时间：2026年5月。
-    请列出目前A股市场中成交量最大、最热门的30只股票代码。
-    要求：直接列出代码即可，用逗号隔开。
-    例如：sh600519, sz002594, sh601318...
-    """
-    
-    raw_text = ask_doubao(prompt, "获取AI预选池")
-    
-    # 打印部分 AI 返回内容以便调试
-    print(f"   [AI 回复片段]: {raw_text[:60].replace(chr(10), ' ')}...")
-    
-    unique_pool = extract_codes(raw_text)
-    print(f"--- 成功识别 {len(unique_pool)} 个有效代码 ---")
-    return unique_pool
+# ========== 4. 执行流程 ==========
 
-# ========== 4. 行情与分析模块 ==========
-
-def get_stock_info(market, code):
-    try:
-        url = f"http://hq.sinajs.cn/list={market}{code}"
-        resp = requests.get(url, timeout=5, headers=HEADERS)
-        content = resp.content.decode('gbk')
-        
-        if "var hq_str_" not in content: return None
-        data = content.split('"')[1]
-        if not data: return None
-        
-        p = data.split(",")
-        name, y_close, now = p[0], float(p[2]), float(p[3])
-        
-        if y_close == 0: return None
-        pct = round(((now - y_close) / y_close) * 100, 2)
-        
-        print(f"   [行情] {code} {name: <8} | {now: >8.2f} | {pct: >6}%")
-        return {"code": code, "name": name, "price": now, "change": pct, "market": market}
-    except:
-        return None
-
-def run_main():
+def main():
     start_time = time.time()
+    print("="*50)
+    print(f"   🚀 A股强势股数据驱动分析系统 - {datetime.now().strftime('%Y-%m-%d')}")
+    print("="*50)
+
+    # 1. 获取最真实、最新的涨停榜数据
+    zt_stocks = get_today_zt_pool()
     
-    # 1. 选股
-    pool = get_hot_stock_pool()
-    if not pool:
-        # 如果还是没有，硬编码几个热门股作为系统演示，防止程序中止
-        print("   [!] AI 未能提供数据，使用系统默认热点库...")
-        pool = [("sh", "600519"), ("sz", "002594"), ("sh", "601318"), ("sz", "000858"), ("sz", "000651")]
+    if not zt_stocks:
+        print("\n[!] 无法获取实时数据，程序退出。请确保在交易时段或确认AkShare接口正常。")
+        return
 
-    # 2. 实时校验
-    print("\n>>> 穿透行情接口校验中...")
-    valid_list = []
-    for m, c in pool:
-        info = get_stock_info(m, c)
-        if info:
-            valid_list.append(info)
-        if len(valid_list) >= 12: break
-        time.sleep(0.1)
+    # 2. 交给 AI 进行多维度研判
+    analysis_report = ask_doubao_analyst(zt_stocks)
 
-    # 3. 深度分析
-    print("\n>>> 生成深度分析报告...")
-    stocks_str = "\n".join([f"{s['name']}({s['code']}):现价{s['price']}, 涨幅{s['change']}%" for s in valid_list])
-    analysis_prompt = f"请针对以下个股行情给出简短的投资逻辑和今日操作建议：\n{stocks_str}"
-    report_body = ask_doubao(analysis_prompt, "生成报告")
+    # 3. 结果汇总
+    final_content = f"""# 📈 A股强势股 AI 动态分析报告
+**数据时间：** {datetime.now().strftime('%Y-%m-%d %H:%M')}
+**数据来源：** 实时行情涨停池 (连板优先)
+
+---
+{analysis_report}
+
+---
+*注：数据取自今日涨停最强势的 Top 20 标的。*
+"""
 
     # 4. 保存与推送
-    final_report = f"# 📊 A股 AI 选股研报\n生成日期: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{report_body}"
-    
     os.makedirs("report", exist_ok=True)
-    with open(f"report/Analysis_{datetime.now().strftime('%H%M')}.md", "w", encoding="utf-8") as f:
-        f.write(final_report)
+    filename = f"report/ZT_Analysis_{datetime.now().strftime('%H%M')}.md"
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(final_content)
     
     if WECOM_WEBHOOK:
-        requests.post(WECOM_WEBHOOK, json={"msgtype": "markdown", "markdown": {"content": final_report}})
-        print("\n✅ 推送完成！")
+        requests.post(WECOM_WEBHOOK, json={
+            "msgtype": "markdown",
+            "markdown": {"content": final_content}
+        })
+        print("\n✅ 推送微信成功！")
 
-    print(f"\n[完成] 全耗时: {int(time.time() - start_time)}s")
+    print(f"\n[完成] 全流程执行完毕，耗时 {int(time.time() - start_time)}s")
 
 if __name__ == "__main__":
-    print("="*50)
-    print("      A股 AI 智能选股系统 v3.1 (稳定版)")
-    print("="*50)
-    run_main()
+    main()
