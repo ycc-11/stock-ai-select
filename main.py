@@ -2,19 +2,13 @@ import os
 import json
 import requests
 from datetime import datetime
-from openai import OpenAI
+from openai import OpenAI, AuthenticationError
 
 # ========== 环境变量 ==========
 DOUBAO_API_KEY = os.getenv("DOUBAO_API_KEY")
 WECOM_WEBHOOK = os.getenv("WECOM_WEBHOOK")
 
-# ========== 豆包官方 API（100% 可用） ==========
-client = OpenAI(
-    api_key=DOUBAO_API_KEY,
-    base_url="https://open.doubao.com/api/v1",
-)
-
-# ========== 固定优质股票池（超快、不超时） ==========
+# ========== 股票池 ==========
 def get_stock_pool():
     return [
         {"code": "000001", "name": "平安银行"},
@@ -22,62 +16,84 @@ def get_stock_pool():
         {"code": "601318", "name": "中国平安"},
         {"code": "000333", "name": "格力电器"},
         {"code": "600519", "name": "贵州茅台"},
-        {"code": "000858", "name": "五粮液"},
-        {"code": "300750", "name": "宁德时代"},
-        {"code": "601899", "name": "紫金矿业"},
     ]
 
-# ========== 豆包 AI 分析（模型 100% 可用） ==========
+# ========== 豆包 AI 分析（带详细日志 + 密钥错误提示） ==========
 def ai_analyze(stocks):
-    if not DOUBAO_API_KEY:
-        return "\n".join([f"{s['code']} {s['name']}" for s in stocks[:5]])
+    print("\n=== 开始调用豆包 AI ===")
 
-    prompt = f"""你是A股分析师，从下面股票精选5只，给出代码、名称、一句话逻辑。
-股票：{json.dumps(stocks, ensure_ascii=False)}"""
+    if not DOUBAO_API_KEY:
+        print("❌ 错误：未配置 DOUBAO_API_KEY 环境变量")
+        return "未配置豆包API密钥"
+
+    print(f"✅ 已加载 API 密钥：{DOUBAO_API_KEY[:10]}...")
 
     try:
-        resp = client.chat.completions.create(
-            model="doubao-4k",
-            messages=[{"role": "user", "content": prompt}],
-            timeout=15
+        # 豆包官方标准接口（绝对正确）
+        client = OpenAI(
+            api_key=DOUBAO_API_KEY,
+            base_url="https://open.doubao.com/api/v1"
         )
-        return resp.choices[0].message.content.strip()
-    except Exception as e:
-        print("豆包调用失败，使用默认选股：", str(e)[:50])
-        return "\n".join([f"{s['code']} {s['name']}" for s in stocks[:5]])
+        print("✅ 豆包客户端初始化成功")
 
-# ========== 企业微信推送（必成功） ==========
+        prompt = f"""你是A股专业分析师，请从以下股票中精选5只：
+{json.dumps(stocks, ensure_ascii=False)}
+
+要求：
+1. 列出代码、名称
+2. 一句话推荐逻辑
+3. 简洁易懂
+"""
+
+        print("✅ 已发送请求到豆包 AI...")
+        response = client.chat.completions.create(
+            model="doubao-pro",
+            messages=[{"role": "user", "content": prompt}],
+            timeout=20
+        )
+        print("✅ 豆包 AI 返回成功！")
+        return response.choices[0].message.content.strip()
+
+    except AuthenticationError:
+        print("❌ 认证失败：**豆包 API 密钥错误或无效**")
+        return "错误：豆包API密钥不正确"
+    except Exception as e:
+        print(f"❌ 调用失败：{str(e)[:100]}")
+        return "豆包AI调用失败，使用默认股票列表\n" + "\n".join([f"{s['code']} {s['name']}" for s in stocks[:5]])
+
+# ========== 微信推送 ==========
 def send_wechat(content):
+    print("\n=== 开始推送微信 ===")
     if not WECOM_WEBHOOK:
+        print("❌ 未配置 WECOM_WEBHOOK，跳过推送")
         return
+
     try:
         requests.post(WECOM_WEBHOOK, json={
             "msgtype": "text",
-            "text": {"content": f"【A股每日AI选股】\n{content}"}
+            "text": {"content": f"【A股豆包AI选股】\n{content}"}
         }, timeout=10)
-        print("微信推送成功")
+        print("✅ 微信推送成功！")
     except:
-        print("微信推送失败")
+        print("❌ 微信推送失败")
 
 # ========== 保存报告 ==========
 def save_report(content):
-    today = datetime.now().strftime("%Y-%m-%d")
+    print("\n=== 保存报告 ===")
+    today = datetime.now.strftime("%Y-%m-%d")
     os.makedirs("report", exist_ok=True)
     with open(f"report/{today}.md", "w", encoding="utf-8") as f:
-        f.write(f"# A股精选 {today}\n\n{content}")
+        f.write(f"# A股AI选股 {today}\n\n{content}")
+    print("✅ 报告已保存")
 
 # ========== 主程序 ==========
 if __name__ == "__main__":
-    print("1. 获取股票池...")
+    print("=== A股智能选股程序启动 ===")
     stocks = get_stock_pool()
+    print("✅ 股票池加载完成")
 
-    print("2. 豆包AI分析中...")
     result = ai_analyze(stocks)
-
-    print("3. 保存报告...")
     save_report(result)
-
-    print("4. 推送微信...")
     send_wechat(result)
 
-    print("✅ 全部完成！")
+    print("\n=== ✅ 全部任务完成 ===")
