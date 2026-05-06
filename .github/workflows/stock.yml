@@ -1,38 +1,36 @@
-name: A股智能选股（技术指标+豆包+微信推送）
+name: A股AI选股-豆包+微信推送
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 1 * * *"  # 每日北京时间 9:00
+    - cron: "0 1 * * *"
 
 jobs:
   stock-select:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 3
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
-        run: |
-          pip install akshare openai requests python-dotenv
+      - name: 安装依赖
+        run: pip install openai requests
 
-      - name: Run stock select
+      - name: 运行选股程序
         env:
           DOUBAO_API_KEY: ${{ secrets.DOUBAO_API_KEY }}
-          WECOM_BOT_ID: ${{ secrets.WECOM_BOT_ID }}
-          WECOM_BOT_SECRET: ${{ secrets.WECOM_BOT_SECRET }}
+          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
         run: python main.py
 
-      - name: Commit report
+      - name: 提交每日报告
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "actions@github.com"
-          git add report/
-          git commit -m "Auto update daily stock report"
-          git push
+          git add report/ || true
+          git commit -m "自动更新每日选股报告" || true
+          git push || true
