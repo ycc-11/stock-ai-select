@@ -5,208 +5,200 @@ import re
 import time
 from datetime import datetime
 
-# ========== 1. 配置中心 ==========
+# ========== 1. 环境配置 ==========
 DOUBAO_API_KEY = os.getenv("DOUBAO_API_KEY")
 WECOM_WEBHOOK = os.getenv("WECOM_WEBHOOK")
 ARK_API_URL = "https://ark.cn-beijing.volces.com/api/v3/responses"
 ENDPOINT_ID = "ep-20260506125835-cc6j5"
 
-# 模拟浏览器请求头
+# 浏览器伪装头
 HEADERS = {
     "Referer": "https://finance.sina.com.cn/",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 }
 
-# ========== 2. 行情获取模块 ==========
-def get_stock_info(market, code):
-    """获取单只股票实时行情并打印明细"""
-    try:
-        url = f"http://hq.sinajs.cn/list={market}{code}"
-        resp = requests.get(url, timeout=5, headers=HEADERS)
-        
-        # 处理编码问题
-        content = resp.text
-        if "var hq_str_" not in content:
-            print(f"   [跳过] 代码 {market}{code}: 无效或未上市")
-            return None
+# ========== 2. 工具函数 ==========
 
-        # 解析新浪数据字符串
-        data_str = content.split('"')[1]
-        if not data_str:
-            print(f"   [警告] 代码 {market}{code}: 停牌或数据为空")
-            return None
-
-        parts = data_str.split(",")
-        name = parts[0]
-        yesterday_close = float(parts[2])
-        current_price = float(parts[3])
-        
-        # 计算涨幅
-        pct_change = 0
-        if yesterday_close > 0:
-            pct_change = ((current_price - yesterday_close) / yesterday_close) * 100
-
-        # 过滤垃圾股
-        if "ST" in name or "退" in name:
-            print(f"   [过滤] {code} {name}: 属于风险股，自动剔除")
-            return None
-
-        print(f"   [成功] {code} {name: <8} | 现价: {current_price: >7} | 涨幅: {pct_change: >6.2f}%")
-        
-        return {
-            "code": code,
-            "name": name,
-            "price": round(current_price, 2),
-            "change": round(pct_change, 2),
-            "market": market
-        }
-    except Exception as e:
-        print(f"   [错误] 获取 {code} 异常: {str(e)}")
-        return None
-
-# ========== 3. AI 逻辑驱动模块 ==========
 def ask_doubao(prompt, log_title="AI调用"):
-    """通用豆包接口调用"""
-    print(f"\n>>> 正在启动 {log_title}...")
+    """底层调用豆包AI接口"""
     if not DOUBAO_API_KEY:
-        return "未配置API Key"
+        print(f"   [!] 错误: 未配置 API KEY")
+        return ""
 
     headers = {
         "Authorization": f"Bearer {DOUBAO_API_KEY}",
         "Content-Type": "application/json"
     }
+    
     payload = {
         "model": ENDPOINT_ID,
-        "stream": False,
-        "messages": [{"role": "user", "content": prompt}]  # 适配标准API格式
+        "messages": [
+            {"role": "system", "content": "你是一个专业的金融数据分析师，严谨且专业。"},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.4  # 较低随机性保证代码输出稳定
     }
 
     try:
-        resp = requests.post(ARK_API_URL, headers=headers, json=payload, timeout=45)
+        resp = requests.post(ARK_API_URL, headers=headers, json=payload, timeout=60)
         res = resp.json()
-        
-        # 兼容不同返回格式
-        content = ""
         if "choices" in res:
-            content = res["choices"][0]["message"]["content"]
-        elif "output" in res:
-            content = res["output"][0]["content"][0].get("text", "")
-            
-        return content.strip()
+            return res["choices"][0]["message"]["content"].strip()
+        return ""
     except Exception as e:
-        print(f"   [异常] {log_title}失败: {str(e)}")
+        print(f"   [!] {log_title} 请求异常: {e}")
         return ""
 
-def get_hot_stock_list():
-    """第一步：让AI列出当前的热门备选股"""
-    prompt = """请列出当前A股市场中最热门的50只领涨板块个股，以及近期连续涨停的30只强势股。
-    要求：
-    1. 只输出代码列表，格式如：sh600000, sz000001
-    2. 不要输出任何中文说明，用逗号分隔。
-    3. 尽量覆盖半导体、低空经济、AI、机器人等近期风口。"""
+def get_stock_info(market, code):
+    """实时抓取新浪财经行情"""
+    try:
+        url = f"http://hq.sinajs.cn/list={market}{code}"
+        resp = requests.get(url, timeout=5, headers=HEADERS)
+        # 必须使用 gbk 解码，否则中文名会乱码
+        content = resp.content.decode('gbk')
+        
+        if "var hq_str_" not in content:
+            return None
+
+        raw_data = content.split('"')[1]
+        if not raw_data: return None
+        
+        parts = raw_data.split(",")
+        if len(parts) < 30: return None
+
+        name = parts[0]
+        y_close = float(parts[2]) # 昨收
+        now_price = float(parts[3]) # 现价
+        
+        if y_close == 0: return None
+        pct_chg = ((now_price - y_close) / y_close) * 100
+
+        # 打印行情日志
+        print(f"   [数据同步] {code} {name: <8} | 价格: {now_price: >8.2f} | 涨幅: {pct_chg: >6.2f}%")
+        
+        return {
+            "code": code, "name": name, 
+            "price": round(now_price, 2), 
+            "change": round(pct_chg, 2),
+            "market": market
+        }
+    except:
+        return None
+
+# ========== 3. 核心业务逻辑 ==========
+
+def get_hot_stock_pool():
+    """让AI根据当前市场热点生成个股代码池"""
+    print("\n>>> 正在分析市场热点板块并筛选领涨个股...")
     
-    raw_response = ask_doubao(prompt, "获取AI预选池")
-    # 正则提取
-    codes = re.findall(r'(sh|sz)\d{6}', raw_response.lower())
-    # 去重
-    unique_codes = list(set(re.findall(r'(sh|sz)(\d{6})', raw_response.lower())))
-    print(f"--- AI 推荐了 {len(unique_codes)} 只潜在关注个股 ---")
-    return unique_codes
+    prompt = """
+    请分析今日A股市场，先列出当前最热门的3-5个板块。
+    然后，针对每个板块列出3-5只代表性的龙头股或强势股。
+    
+    最后，请【只汇总】所有股票代码，要求：
+    1. 格式为：前缀+代码（如 sh600519, sz000001）。
+    2. 使用逗号分隔，不要有任何中文解释。
+    3. 总数不少于 20 只。
+    """
+    
+    raw_text = ask_doubao(prompt, "获取AI代码池")
+    
+    # 提取 sh/sz + 6位数字
+    matches = re.findall(r'(sh|sz)(\d{6})', raw_text.lower())
+    
+    unique_pool = []
+    seen = set()
+    for m, c in matches:
+        if c not in seen:
+            unique_pool.append((m, c))
+            seen.add(c)
+    
+    # 兜底逻辑：如果 AI 没加前缀，强行提取纯 6 位数字
+    if len(unique_pool) < 5:
+        num_matches = re.findall(r'\b(\d{6})\b', raw_text)
+        for c in num_matches:
+            if c not in seen:
+                m = "sh" if c.startswith(('60', '68')) else "sz"
+                unique_pool.append((m, c))
+                seen.add(c)
 
-# ========== 4. 核心执行流程 ==========
-def get_final_stock_pool():
-    """第二步：结合行情筛选真正值得分析的股票"""
-    raw_list = get_hot_stock_list()
-    if not raw_list:
-        print("!!! 无法获取AI推荐列表，启用备选库")
-        return [
-            {"code": "600519", "name": "贵州茅台", "price": 1700.0, "change": 0.5},
-            {"code": "002594", "name": "比亚迪", "price": 280.0, "change": 1.2}
-        ]
+    print(f"--- AI 推荐池扫描完毕，共获取 {len(unique_pool)} 个有效标的 ---")
+    return unique_pool
 
-    print("\n>>> 开始进行实时行情校验（筛选值得买入/卖出的标的）...")
+def generate_report():
+    """主流程：选股 -> 过滤 -> 分析 -> 推送"""
+    start_time = time.time()
+    
+    # 1. AI 预选
+    raw_pool = get_hot_stock_pool()
+    if not raw_pool:
+        print("!!! 未能获取个股池，程序中止")
+        return
+
+    # 2. 实时行情过滤（只保留有成交、未停牌的）
+    print("\n>>> 正在穿透新浪行情接口进行实时校验...")
     valid_stocks = []
-    for market, code in raw_list:
+    for market, code in raw_pool:
         info = get_stock_info(market, code)
         if info:
-            # 筛选逻辑：排除涨幅过大（如>9%）防止追高，排除跌幅过大（如<-7%）防止踩雷
-            if -7 <= info['change'] <= 9:
-                valid_stocks.append(info)
-        
-        # 限制单次分析数量，保证报告质量
-        if len(valid_stocks) >= 15:
+            valid_stocks.append(info)
+        if len(valid_stocks) >= 12: # 限制分析数量，保证 AI 回复质量
             break
-        # 稍微延迟防止触发接口频率限制
         time.sleep(0.1)
 
-    print(f"--- 筛选完成：共 {len(valid_stocks)} 只个股进入最终分析环节 ---")
-    return valid_stocks
-
-# ========== 5. 报告生成与发送 ==========
-def generate_final_report(stocks):
-    """最终汇总分析"""
-    # 1. 深度分析个股
-    stock_context = json.dumps(stocks, ensure_ascii=False)
-    analysis_prompt = f"""针对以下实时行情数据，请以专业分析师角度进行研判。
-    数据：{stock_context}
-    
-    格式要求（逐个分析）：
-    【代码+名称】
-    📊 板块定位：
-    💡 实时操作：(买入/观望/减持)
-    📌 核心逻辑：(结合价格和涨幅说明)
-    """
-    analysis_result = ask_doubao(analysis_prompt, "深度分析个股")
-
-    # 2. 市场宏观信息
-    market_prompt = "总结今日A股市场三大热门板块、整体资金流向及重大政策利好，要求排版精简适合手机阅读。"
-    market_result = ask_doubao(market_prompt, "获取宏观环境")
-
-    # 3. 组装
-    report = f"【📊 A股AI智能研报 - {datetime.now().strftime('%Y-%m-%d')}】\n"
-    report += "\n" + "="*15 + " 个股深度研判 " + "="*15 + "\n"
-    report += analysis_result + "\n\n"
-    report += "="*15 + " 市场热点观察 " + "="*15 + "\n"
-    report += market_result
-    
-    return report
-
-def send_to_wechat(content):
-    if not WECOM_WEBHOOK:
-        print("\n[跳过] 未配置微信Webhook，仅本地保存")
+    # 3. 针对过滤后的个股进行深度研判
+    if not valid_stocks:
+        print("!!! 实时行情校验失败，无可分析标的")
         return
-    try:
-        requests.post(WECOM_WEBHOOK, json={
-            "msgtype": "text",
-            "text": {"content": content}
-        }, timeout=10)
-        print("\n[通知] 微信报告推送成功！")
-    except Exception as e:
-        print(f"\n[失败] 微信推送异常: {e}")
 
-def save_local_report(content):
+    print("\n>>> 正在调用 AI 进行深度策略研判...")
+    stock_list_str = json.dumps(valid_stocks, ensure_ascii=False)
+    analysis_prompt = f"""
+    请作为资深策略师，分析以下个股的实时行情数据：
+    {stock_list_str}
+    
+    输出要求：
+    1. 简要评价今日大盘情绪。
+    2. 对上述个股逐一分析：给出【所属板块】、【操作建议】（短线参与、分批低吸、暂时观望）和【核心逻辑】。
+    3. 排版整洁，使用 Markdown 格式。
+    """
+    
+    final_analysis = ask_doubao(analysis_prompt, "深度分析")
+
+    # 4. 组装与输出
+    report_content = f"""# 📊 A股AI智能选股研报
+**生成时间：** {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+---
+{final_analysis}
+
+---
+*温馨提示：本报告由AI自动生成，不构成投资建议，股市有风险，入市需谨慎。*
+"""
+
+    # 保存本地
     os.makedirs("report", exist_ok=True)
-    filename = f"report/Report_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(content)
-    print(f"[文件] 报告已保存至: {filename}")
+    file_path = f"report/Analysis_{datetime.now().strftime('%H%M')}.md"
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(report_content)
+    
+    # 微信推送
+    if WECOM_WEBHOOK:
+        try:
+            requests.post(WECOM_WEBHOOK, json={
+                "msgtype": "markdown",
+                "markdown": {"content": report_content}
+            })
+            print("\n✅ 微信推送成功！")
+        except:
+            print("\n❌ 微信推送失败")
 
-# ========== 6. 主程序入口 ==========
+    print(f"\n=== 全流程完成，总耗时: {int(time.time() - start_time)}s ===")
+    print(f"📄 报告已保存至: {file_path}")
+
+# ========== 4. 执行入口 ==========
 if __name__ == "__main__":
-    start_time = time.time()
-    print("="*40)
-    print("   🚀 A股 AI 智能选股系统 (热点驱动版) 启动")
-    print("="*40)
-
-    # 第一步 & 第二步：AI预选 + 实时行情筛选
-    selected_stocks = get_final_stock_pool()
-
-    # 第三步：生成研报
-    final_report = generate_final_report(selected_stocks)
-
-    # 第四步：输出与推送
-    save_local_report(final_report)
-    send_to_wechat(final_report)
-
-    end_time = time.time()
-    print(f"\n[完成] 全流程执行完毕，耗时 {int(end_time - start_time)}s")
+    print("="*50)
+    print("      A股 AI 智能选股系统 v3.0 (行情驱动型)")
+    print("="*50)
+    generate_report()
