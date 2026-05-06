@@ -9,7 +9,7 @@ WECOM_WEBHOOK = os.getenv("WECOM_WEBHOOK")
 ARK_API_URL = "https://ark.cn-beijing.volces.com/api/v3/responses"
 ENDPOINT_ID = "ep-20260506125835-cc6j5"
 
-# ========== 1. 获取A股列表 ==========
+# ========== 1. 获取股票列表 ==========
 def get_all_stocks():
     stocks = []
     for prefix in ["600", "601", "603", "605"]:
@@ -36,8 +36,6 @@ def get_stock_info(market, code):
 
         name = parts[0]
         price = float(parts[3])
-        pre_close = float(parts[2])
-        volume = float(parts[8])
 
         if "ST" in name or "退" in name:
             return None
@@ -50,7 +48,7 @@ def get_stock_info(market, code):
     except:
         return None
 
-# ========== 3. 筛选符合形态的股票（已修复！） ==========
+# ========== 3. 筛选符合形态的股票 ==========
 def get_stock_pool():
     print("\n=== 开始获取并筛选符合技术形态的股票 ===")
     all_stocks = get_all_stocks()
@@ -75,7 +73,7 @@ def get_default_stocks():
         {"code": "000858", "name": "五粮液", "price": 168.88},
     ]
 
-# ========== 豆包AI 分析（解析已修复！） ==========
+# ========== 豆包AI 分析 ==========
 def doubao_analyze(stocks):
     print("\n=== 开始调用豆包AI ===")
     if not DOUBAO_API_KEY:
@@ -111,11 +109,7 @@ def doubao_analyze(stocks):
         resp = requests.post(ARK_API_URL, headers=headers, json=payload, timeout=25)
         print(f"✅ 状态码：{resp.status_code}")
 
-        if resp.status_code != 200:
-            raise Exception(f"返回异常：{resp.text[:100]}")
-
         res = resp.json()
-        # 🔥 关键修复：适配火山方舟返回结构
         text = ""
         if "response" in res:
             output = res["response"]["output"][0]
@@ -148,13 +142,14 @@ def send_wechat(content):
     except:
         print("❌ 微信推送失败")
 
-# ========== 保存报告 ==========
+# ========== 保存报告（文件名：年月日_小时分钟） ==========
 def save_report(content):
-    today = datetime.now().strftime("%Y-%m-%d")
+    print("\n=== 保存报告 ===")
+    filename = datetime.now().strftime("%Y-%m-%d_%H%M")
     os.makedirs("report", exist_ok=True)
-    with open(f"report/{today}.md", "w", encoding="utf-8") as f:
-        f.write(f"# A股AI选股报告 {today}\n\n{content}")
-    print("✅ 报告已保存")
+    with open(f"report/{filename}.md", "w", encoding="utf-8") as f:
+        f.write(f"# A股AI选股报告 {filename}\n\n{content}")
+    print(f"✅ 报告已生成：report/{filename}.md")
 
 # ========== 主程序 ==========
 if __name__ == "__main__":
