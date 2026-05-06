@@ -29,25 +29,21 @@ def ai_analyze(stocks):
     print(f"✅ 已加载 API 密钥：{DOUBAO_API_KEY[:10]}...")
 
     try:
-        # 豆包官方标准接口（绝对正确）
         client = OpenAI(
             api_key=DOUBAO_API_KEY,
-            base_url="https://open.doubao.com/api/v1"
+            base_url="https://ark.cn-beijing.volces.com/api/v1"
         )
         print("✅ 豆包客户端初始化成功")
 
         prompt = f"""你是A股专业分析师，请从以下股票中精选5只：
 {json.dumps(stocks, ensure_ascii=False)}
 
-要求：
-1. 列出代码、名称
-2. 一句话推荐逻辑
-3. 简洁易懂
+要求：简洁，列出代码、名称、推荐逻辑。
 """
 
         print("✅ 已发送请求到豆包 AI...")
         response = client.chat.completions.create(
-            model="doubao-pro",
+            model="ep-20250318150347-29fwl",  # 通用免费模型
             messages=[{"role": "user", "content": prompt}],
             timeout=20
         )
@@ -77,10 +73,10 @@ def send_wechat(content):
     except:
         print("❌ 微信推送失败")
 
-# ========== 保存报告 ==========
+# ========== 保存报告（已修复） ==========
 def save_report(content):
     print("\n=== 保存报告 ===")
-    today = datetime.now.strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
     os.makedirs("report", exist_ok=True)
     with open(f"report/{today}.md", "w", encoding="utf-8") as f:
         f.write(f"# A股AI选股 {today}\n\n{content}")
