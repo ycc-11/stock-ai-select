@@ -73,26 +73,13 @@ def get_default_stocks():
         {"code": "000858", "name": "五粮液", "price": 168.88},
     ]
 
-# ========== 豆包AI 分析（强制格式输出 100% 正常） ==========
-def doubao_analyze(stocks):
+# ========== 【通用】调用豆包AI（打印返回值） ==========
+def ask_doubao(prompt):
     print("\n=== 开始调用豆包AI ===")
     if not DOUBAO_API_KEY:
-        print("❌ 未配置豆包API Key")
-        return "未配置豆包AI"
+        return "未配置API Key"
 
     print(f"✅ API Key：{DOUBAO_API_KEY[:10]}...")
-
-    # 🔥 超级强化提示词（强制输出格式，100% 不会丢）
-    prompt = """
-你必须严格、逐条、完整地按下面格式输出，不能省略任何一项：
-
-【股票代码+名称】
-📊 所属板块：
-💡 推荐理由：
-📌 投资逻辑：
-
-逐条分析下面股票：
-""" + json.dumps(stocks, ensure_ascii=False)
 
     headers = {
         "Authorization": f"Bearer {DOUBAO_API_KEY}",
@@ -106,33 +93,53 @@ def doubao_analyze(stocks):
     }
 
     try:
-        print("✅ 请求豆包AI中...")
-        resp = requests.post(ARK_API_URL, headers=headers, json=payload, timeout=25)
+        resp = requests.post(ARK_API_URL, headers=headers, json=payload, timeout=30)
         print(f"✅ 状态码：{resp.status_code}")
-
         res = resp.json()
+
+        # ======================
+        # 1. 打印豆包完整返回值
+        # ======================
+        print("\n======================")
+        print("📝 豆包原始返回值：")
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        print("======================\n")
+
         text = ""
         if "response" in res:
             output = res["response"]["output"][0]
             if output["type"] == "message":
                 text = output["content"][0]["text"]
 
-        # 🔥 最终保险：如果格式还是不对，自动补全
-        if not text or "【" not in text:
-            text = ""
-            for s in stocks:
-                text += f"【{s['code']} {s['name']}】\n📊 所属板块：\n💡 推荐理由：\n📌 投资逻辑：\n\n"
-
-        print("✅ 豆包AI分析完成！")
-        return text.strip()
+        return text.strip() if text else "无返回内容"
 
     except Exception as e:
-        print(f"❌ 调用失败：{str(e)[:150]}")
-        fallback = ""
-        for s in stocks:
-            fallback += f"【{s['code']} {s['name']}】\n📊 所属板块：\n💡 推荐理由：\n📌 投资逻辑：\n\n"
-        return fallback
+        print(f"❌ 调用失败：{str(e)}")
+        return "AI调用失败"
 
+# ========== 分析股票 ==========
+def analyze_stocks(stocks):
+    prompt = """严格按以下格式输出，每条都不能少：
+
+【股票代码+名称】
+📊 所属板块：
+💡 推荐理由：
+📌 投资逻辑：
+
+分析列表：
+""" + json.dumps(stocks, ensure_ascii=False)
+    return ask_doubao(prompt)
+
+# ========== 2. 获取热门板块、资金流向、热门事件 ==========
+def get_market_hot_info():
+    prompt = """请输出今日A股：
+1. 热门板块
+2. 资金流向
+3. 热门市场事件
+
+格式简洁清晰，适合微信阅读。
+"""
+    return ask_doubao(prompt)
 
 # ========== 微信推送 ==========
 def send_wechat(content):
@@ -144,26 +151,42 @@ def send_wechat(content):
     try:
         requests.post(WECOM_WEBHOOK, json={
             "msgtype": "text",
-            "text": {"content": f"【A股AI智能选股】\n{content}"}
+            "text": {"content": content}
         }, timeout=10)
         print("✅ 微信推送成功！")
     except:
         print("❌ 微信推送失败")
 
-# ========== 保存报告（文件名：年月日_小时分钟） ==========
+# ========== 保存报告（年月日_小时分钟） ==========
 def save_report(content):
-    print("\n=== 保存报告 ===")
     filename = datetime.now().strftime("%Y-%m-%d_%H%M")
     os.makedirs("report", exist_ok=True)
     with open(f"report/{filename}.md", "w", encoding="utf-8") as f:
         f.write(f"# A股AI选股报告 {filename}\n\n{content}")
-    print(f"✅ 报告已生成：report/{filename}.md")
+    print(f"✅ 报告已保存：report/{filename}.md")
 
 # ========== 主程序 ==========
 if __name__ == "__main__":
     print("=== A股AI智能选股系统 ===")
+
+    # 1. 获取股票池
     stocks = get_stock_pool()
-    result = doubao_analyze(stocks)
-    save_report(result)
-    send_wechat(result)
+
+    # 2. 分析股票
+    stock_analysis = analyze_stocks(stocks)
+
+    # 3. 获取市场热点（新增）
+    market_info = get_market_hot_info()
+
+    # 4. 合并最终内容
+    final_content = "【📊 A股AI智能选股报告】\n\n"
+    final_content += "=== 精选股票分析 ===\n"
+    final_content += stock_analysis + "\n\n"
+    final_content += "=== 今日市场热点 ===\n"
+    final_content += market_info
+
+    # 5. 保存 + 推送
+    save_report(final_content)
+    send_wechat(final_content)
+
     print("\n=== ✅ 全部完成 ===")
