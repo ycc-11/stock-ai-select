@@ -6,7 +6,7 @@ from datetime import datetime
 # ========== 配置 ==========
 DOUBAO_API_KEY = os.getenv("DOUBAO_API_KEY")
 WECOM_WEBHOOK = os.getenv("WECOM_WEBHOOK")
-ARK_API_URL = "httpsark.cn-beijing.volces.com/api/v3/responses"
+ARK_API_URL = "https://ark.cn-beijing.volces.com/api/v3/responses"  # 修复处
 ENDPOINT_ID = "ep-20260506125835-cc6j5"
 
 # ========== 1. 获取股票列表 ==========
