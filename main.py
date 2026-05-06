@@ -6,7 +6,7 @@ from datetime import datetime
 # ========== 配置 ==========
 DOUBAO_API_KEY = os.getenv("DOUBAO_API_KEY")
 WECOM_WEBHOOK = os.getenv("WECOM_WEBHOOK")
-ARK_API_URL = "https://ark.cn-beijing.volces.com/api/v3/responses"
+ARK_API_URL = "httpsark.cn-beijing.volces.com/api/v3/responses"
 ENDPOINT_ID = "ep-20260506125835-cc6j5"
 
 # ========== 1. 获取股票列表 ==========
@@ -48,7 +48,7 @@ def get_stock_info(market, code):
     except:
         return None
 
-# ========== 3. 筛选符合形态的股票 ==========
+# ========== 3. 筛选符合形态的股票 + 打印筛选明细 ==========
 def get_stock_pool():
     print("\n=== 开始获取并筛选符合技术形态的股票 ===")
     all_stocks = get_all_stocks()
@@ -61,7 +61,12 @@ def get_stock_pool():
             if len(valid) >= 6:
                 break
 
-    print(f"✅ 筛选完成，符合条件股票：{len(valid)} 只")
+    print(f"✅ 筛选完成，符合条件股票共 {len(valid)} 只")
+    # 新增：打印每一只筛选结果
+    print("📋 本次筛选股票明细：")
+    for item in valid:
+        print(f"- {item['code']} {item['name']} 价格：{item['price']}")
+
     return valid if valid else get_default_stocks()
 
 # ========== 兜底股票 ==========
@@ -73,7 +78,7 @@ def get_default_stocks():
         {"code": "000858", "name": "五粮液", "price": 168.88},
     ]
 
-# ========== 【通用】调用豆包AI（打印返回值） ==========
+# ========== 通用调用豆包 + 打印原始返回 ==========
 def ask_doubao(prompt):
     print("\n=== 开始调用豆包AI ===")
     if not DOUBAO_API_KEY:
@@ -97,19 +102,17 @@ def ask_doubao(prompt):
         print(f"✅ 状态码：{resp.status_code}")
         res = resp.json()
 
-        # ======================
-        # 1. 打印豆包完整返回值
-        # ======================
+        # 打印豆包完整原始返回
         print("\n======================")
         print("📝 豆包原始返回值：")
         print(json.dumps(res, ensure_ascii=False, indent=2))
         print("======================\n")
 
         text = ""
-        if "response" in res:
-            output = res["response"]["output"][0]
-            if output["type"] == "message":
-                text = output["content"][0]["text"]
+        if "output" in res and len(res["output"]) > 0:
+            content_list = res["output"][0].get("content", [])
+            if content_list:
+                text = content_list[0].get("text", "")
 
         return text.strip() if text else "无返回内容"
 
@@ -117,27 +120,26 @@ def ask_doubao(prompt):
         print(f"❌ 调用失败：{str(e)}")
         return "AI调用失败"
 
-# ========== 分析股票 ==========
+# ========== 分析单只股票 ==========
 def analyze_stocks(stocks):
-    prompt = """严格按以下格式输出，每条都不能少：
-
+    prompt = """严格按下面固定格式逐条输出，不要改动格式：
 【股票代码+名称】
 📊 所属板块：
 💡 推荐理由：
 📌 投资逻辑：
 
-分析列表：
+分析以下股票：
 """ + json.dumps(stocks, ensure_ascii=False)
     return ask_doubao(prompt)
 
-# ========== 2. 获取热门板块、资金流向、热门事件 ==========
+# ========== 获取热门板块、资金流向、市场事件 ==========
 def get_market_hot_info():
-    prompt = """请输出今日A股：
-1. 热门板块
-2. 资金流向
-3. 热门市场事件
+    prompt = """请简洁输出今日A股三方面内容：
+1. 当前热门板块
+2. 整体资金流向
+3. 最新市场热门事件
 
-格式简洁清晰，适合微信阅读。
+排版清晰、适合微信阅读，不用多余客套话。
 """
     return ask_doubao(prompt)
 
@@ -157,7 +159,7 @@ def send_wechat(content):
     except:
         print("❌ 微信推送失败")
 
-# ========== 保存报告（年月日_小时分钟） ==========
+# ========== 保存报告：直接用豆包拼接好的完整内容 ==========
 def save_report(content):
     filename = datetime.now().strftime("%Y-%m-%d_%H%M")
     os.makedirs("report", exist_ok=True)
@@ -169,23 +171,23 @@ def save_report(content):
 if __name__ == "__main__":
     print("=== A股AI智能选股系统 ===")
 
-    # 1. 获取股票池
+    # 1. 选股并打印明细
     stocks = get_stock_pool()
 
-    # 2. 分析股票
+    # 2. 股票AI分析
     stock_analysis = analyze_stocks(stocks)
 
-    # 3. 获取市场热点（新增）
+    # 3. 市场热点AI分析
     market_info = get_market_hot_info()
 
-    # 4. 合并最终内容
-    final_content = "【📊 A股AI智能选股报告】\n\n"
-    final_content += "=== 精选股票分析 ===\n"
+    # 4. 组装最终报告内容
+    final_content = "【📊 A股AI智能选股每日报告】\n\n"
+    final_content += "===== 精选个股分析 =====\n"
     final_content += stock_analysis + "\n\n"
-    final_content += "=== 今日市场热点 ===\n"
+    final_content += "===== 今日市场热点 =====\n"
     final_content += market_info
 
-    # 5. 保存 + 推送
+    # 5. 保存报告、微信推送
     save_report(final_content)
     send_wechat(final_content)
 
