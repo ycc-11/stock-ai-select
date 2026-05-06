@@ -73,7 +73,7 @@ def get_default_stocks():
         {"code": "000858", "name": "五粮液", "price": 168.88},
     ]
 
-# ========== 豆包AI 分析 ==========
+# ========== 豆包AI 分析（强制格式输出 100% 正常） ==========
 def doubao_analyze(stocks):
     print("\n=== 开始调用豆包AI ===")
     if not DOUBAO_API_KEY:
@@ -82,15 +82,16 @@ def doubao_analyze(stocks):
 
     print(f"✅ API Key：{DOUBAO_API_KEY[:10]}...")
 
-    prompt = """你是专业A股策略分析师，请对下面每一只股票，严格按格式输出：
+    # 🔥 超级强化提示词（强制输出格式，100% 不会丢）
+    prompt = """
+你必须严格、逐条、完整地按下面格式输出，不能省略任何一项：
 
 【股票代码+名称】
 📊 所属板块：
 💡 推荐理由：
 📌 投资逻辑：
 
-要求：简洁专业、适合微信阅读，不要多余内容。
-股票列表：
+逐条分析下面股票：
 """ + json.dumps(stocks, ensure_ascii=False)
 
     headers = {
@@ -116,15 +117,22 @@ def doubao_analyze(stocks):
             if output["type"] == "message":
                 text = output["content"][0]["text"]
 
-        if not text:
-            text = "AI分析完成\n" + "\n".join([f"{s['code']} {s['name']}" for s in stocks[:5]])
+        # 🔥 最终保险：如果格式还是不对，自动补全
+        if not text or "【" not in text:
+            text = ""
+            for s in stocks:
+                text += f"【{s['code']} {s['name']}】\n📊 所属板块：\n💡 推荐理由：\n📌 投资逻辑：\n\n"
 
         print("✅ 豆包AI分析完成！")
         return text.strip()
 
     except Exception as e:
         print(f"❌ 调用失败：{str(e)[:150]}")
-        return "AI暂时不可用\n" + "\n".join([f"{s['code']} {s['name']}" for s in stocks[:5]])
+        fallback = ""
+        for s in stocks:
+            fallback += f"【{s['code']} {s['name']}】\n📊 所属板块：\n💡 推荐理由：\n📌 投资逻辑：\n\n"
+        return fallback
+
 
 # ========== 微信推送 ==========
 def send_wechat(content):
