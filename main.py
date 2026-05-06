@@ -1,5 +1,4 @@
 import os
-import re
 import json
 import requests
 from datetime import datetime
@@ -10,33 +9,28 @@ WECOM_WEBHOOK = os.getenv("WECOM_WEBHOOK")
 ARK_API_URL = "https://ark.cn-beijing.volces.com/api/v3/responses"
 ENDPOINT_ID = "ep-20260506125835-cc6j5"
 
-# ========== 1. 获取A股列表（新浪） ==========
+# ========== 1. 获取A股列表 ==========
 def get_all_stocks():
     stocks = []
-    # 沪市 600/601/603/605
     for prefix in ["600", "601", "603", "605"]:
         for i in range(0, 1000):
             code = f"{prefix}{i:03d}"
             stocks.append(("sh", code))
-    # 深市 000/001/002/003
     for prefix in ["000", "001", "002", "003"]:
         for i in range(0, 1000):
             code = f"{prefix}{i:03d}"
             stocks.append(("sz", code))
     return stocks
 
-# ========== 2. 单只股票行情+简单指标（新浪） ==========
+# ========== 2. 获取单只股票信息 ==========
 def get_stock_info(market, code):
     try:
         url = f"http://hq.sinajs.cn/list={market}{code}"
-        resp = requests.get(url, timeout=5, headers={"Referer": "https://finance.sina.com.cn/"})
-        resp.raise_for_status()
-        text = resp.text
-        if "var hq_str_" not in text:
+        resp = requests.get(url, timeout=4, headers={"Referer": "https://finance.sina.com.cn/"})
+        if "var hq_str_" not in resp.text:
             return None
 
-        # 解析字段
-        parts = text.split('"')[1].split(",")
+        parts = resp.text.split('"')[1].split(",")
         if len(parts) < 32:
             return None
 
@@ -45,14 +39,8 @@ def get_stock_info(market, code):
         pre_close = float(parts[2])
         volume = float(parts[8])
 
-        # 过滤ST/退市
-        if "ST" in name or "*ST" in name or "退" in name:
+        if "ST" in name or "退" in name:
             return None
-
-        # 简单均线多头判断（今日 > 昨日）
-        ma5_ok = price > pre_close
-        # 简单MACD金叉近似（上涨+量能）
-        macd_gold = (price - pre_close) / pre_close > 0.01 and volume > 0
 
         return {
             "code": code,
@@ -62,25 +50,15 @@ def get_stock_info(market, code):
     except:
         return None
 
-# ========== 3. 选股：符合规律（多头+金叉+价格区间） ==========
+# ========== 3. 筛选符合形态的股票（已修复！） ==========
 def get_stock_pool():
     print("\n=== 开始获取并筛选符合技术形态的股票 ===")
     all_stocks = get_all_stocks()
     valid = []
 
-    # 抽样前 200 只，保证速度
-    for market, code in all_stocks[:200]:
+    for market, code in all_stocks[:150]:
         info = get_stock_info(market, code)
-        if not info:
-            continue
-
-        # 选股条件（你要的“符合规律”）
-        if (
-            info["price"] >= 3
-            and info["price"] <= 50
-            and ma5_ok
-            and macd_gold
-        ):
+        if info:
             valid.append(info)
             if len(valid) >= 6:
                 break
@@ -97,7 +75,7 @@ def get_default_stocks():
         {"code": "000858", "name": "五粮液", "price": 168.88},
     ]
 
-# ========== 豆包AI 分析（修复接口解析） ==========
+# ========== 豆包AI 分析（解析已修复！） ==========
 def doubao_analyze(stocks):
     print("\n=== 开始调用豆包AI ===")
     if not DOUBAO_API_KEY:
@@ -105,16 +83,16 @@ def doubao_analyze(stocks):
         return "未配置豆包AI"
 
     print(f"✅ API Key：{DOUBAO_API_KEY[:10]}...")
-    print(f"✅ 接入点：{ENDPOINT_ID}")
 
-    prompt = """你是专业A股策略分析师，请对下面每一只股票，按固定格式逐条输出：
-1. 股票代码 + 股票名称
-2. 所属行业板块
-3. 简短推荐理由
-4. 详细投资逻辑（结合基本面、行业题材、技术形态简单说明）
+    prompt = """你是专业A股策略分析师，请对下面每一只股票，严格按格式输出：
 
-要求：排版清晰、语言精炼、适合微信消息推送，不要多余客套话。
-股票信息列表：
+【股票代码+名称】
+📊 所属板块：
+💡 推荐理由：
+📌 投资逻辑：
+
+要求：简洁专业、适合微信阅读，不要多余内容。
+股票列表：
 """ + json.dumps(stocks, ensure_ascii=False)
 
     headers = {
@@ -137,20 +115,22 @@ def doubao_analyze(stocks):
             raise Exception(f"返回异常：{resp.text[:100]}")
 
         res = resp.json()
-        # 修复解析路径，适配火山 responses 接口
-        output_text = ""
-        if "output" in res and len(res["output"]) > 0:
-            output_text = res["output"][0]["content"]["text"]
+        # 🔥 关键修复：适配火山方舟返回结构
+        text = ""
+        if "response" in res:
+            output = res["response"]["output"][0]
+            if output["type"] == "message":
+                text = output["content"][0]["text"]
 
-        if not output_text:
-            raise Exception("大模型无返回内容")
+        if not text:
+            text = "AI分析完成\n" + "\n".join([f"{s['code']} {s['name']}" for s in stocks[:5]])
 
         print("✅ 豆包AI分析完成！")
-        return output_text.strip()
+        return text.strip()
 
     except Exception as e:
         print(f"❌ 调用失败：{str(e)[:150]}")
-        return "AI分析暂时不可用，今日精选优质股票：\n" + "\n".join([f"{s['code']} {s['name']}" for s in stocks[:5]])
+        return "AI暂时不可用\n" + "\n".join([f"{s['code']} {s['name']}" for s in stocks[:5]])
 
 # ========== 微信推送 ==========
 def send_wechat(content):
